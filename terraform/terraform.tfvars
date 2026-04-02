@@ -1,0 +1,12 @@
+aws_region            = "us-east-1"
+environment           = "dev"
+project_name          = "drug-recommendation"
+vpc_cidr              = "10.0.0.0/16"
+public_subnet_cidr    = "10.0.1.0/24"
+private_subnet_cidr   = "10.0.2.0/24"
+create_ec2_instance   = true
+instance_type         = "t3.small"
+root_volume_size      = 20
+docker_image          = "ghcr.io/YOUR_ORG/devops:latest"
+allowed_ssh_cidr      = ["0.0.0.0/0"]
+log_retention_days    = 7

@@ -1,0 +1,49 @@
+# Auto normalize line endings
+* text=auto
+
+# Python files
+*.py text eol=lf
+*.pyw text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows files
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Data files
+*.csv text
+
+# YAML files
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Terraform files
+*.tf text eol=lf
+*.hcl text eol=lf
+
+# Docker files
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+
+# Binary files
+*.pkl binary
+*.joblib binary
+*.pth binary
+*.model binary
+*.h5 binary
+*.pkl diff=delta
+model.pkl diff=delta
+
+# Compressed files
+*.zip binary
+*.tar binary
+*.gz binary
+
+# Images
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
