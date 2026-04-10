@@ -30,8 +30,13 @@ jobs:
       - name: Run tests
         run: pytest test_app.py -v
 
-      - name: Verify model
+      - name: Train model if not exists
         run: |
+          if [ ! -f model.pkl ]; then
+            echo "Training model..."
+            pip install scikit-learn pandas numpy
+            python train/train_model.py
+          fi
           python -c "import joblib; m = joblib.load('model.pkl'); print('Model keys:', list(m.keys()))"
 
   build:
