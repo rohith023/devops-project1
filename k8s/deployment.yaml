@@ -33,8 +33,8 @@ spec:
     spec:
       containers:
       - name: drug-recommendation
-        image: drug-app:latest
-        imagePullPolicy: Never
+        image: docker.io/rohith023/drug-app:latest
+        imagePullPolicy: Always
         ports:
         - name: http
           containerPort: 5000
