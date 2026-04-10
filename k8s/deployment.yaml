@@ -33,8 +33,8 @@ spec:
     spec:
       containers:
       - name: drug-recommendation
-        image: ghcr.io/YOUR_ORG/devops:latest
-        imagePullPolicy: Always
+        image: drug-app:latest
+        imagePullPolicy: Never
         ports:
         - name: http
           containerPort: 5000

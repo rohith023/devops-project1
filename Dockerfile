@@ -17,12 +17,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install numpy first so joblib/sklearn unpickling uses the expected runtime version
 RUN pip install --upgrade pip && \
+    pip install numpy==1.26.4 && \
     pip install -r requirements.txt
 
-# Copy application code
+# Copy application code, including model.pkl
 COPY . .
+
+# Fail the build early if the packaged model is missing
+RUN test -f /app/model.pkl
 
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && \
@@ -39,4 +43,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:5000/health', timeout=5)" || exit 1
 
 # Run the application with gunicorn for production
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "2", "--worker-class", "gthread", "--timeout", "60", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
