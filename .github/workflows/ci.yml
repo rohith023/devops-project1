@@ -1,4 +1,4 @@
-name: CI Pipeline
+name: CI/CD Pipeline
 
 on:
   push:
@@ -8,9 +8,15 @@ on:
 
 permissions:
   contents: read
+  packages: write
+  id-token: write
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/drug-app
 
 jobs:
-  test:
+  lint-test:
+    name: Test & Lint
     runs-on: ubuntu-latest
     
     steps:
@@ -30,13 +36,14 @@ jobs:
       - name: Run tests
         run: pytest test_app.py -v
 
-      - name: Verify model exists
+      - name: Verify model
         run: |
           ls -la model.pkl
-          python -c "import joblib; m = joblib.load('model.pkl'); print('Model loaded with keys:', list(m.keys()))"
+          python -c "import joblib; m = joblib.load('model.pkl'); print('Model OK:', list(m.keys()))"
 
   build:
-    needs: test
+    name: Build Docker Image
+    needs: lint-test
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     
@@ -53,14 +60,56 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/drug-app:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/drug-app:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Done
-        run: echo "Docker image pushed to Docker Hub"
+      - name: Image digest
+        run: echo "Image pushed: ${{ env.DOCKER_IMAGE }}"
+
+  deploy-k8s:
+    name: Deploy to Kubernetes
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    environment: production
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.28.0
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f k8s/deployment.yaml --record
+          kubectl rollout status deployment/drug-recommendation-app -n drug-recommendation --timeout=300s
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n drug-recommendation
+          kubectl get svc -n drug-recommendation
