@@ -8,14 +8,23 @@ on:
 
 permissions:
   contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/drug-app
 
 jobs:
+  # ============================================
+  # STAGE 1: TEST
+  # ============================================
   test:
     name: Test
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -27,42 +36,118 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pytest
 
-      - name: Run tests
+      - name: Run unit tests
         run: pytest test_app.py -v
 
-      - name: Verify model
+      - name: Verify model exists
         run: |
           ls -la model.pkl
-          python -c "import joblib; m = joblib.load('model.pkl'); print('Model OK:', list(m.keys()))"
+          python -c "import joblib; m = joblib.load('model.pkl'); print('Model loaded:', list(m.keys()))"
 
+      - name: Verify Docker
+        run: docker --version
+
+  # ============================================
+  # STAGE 2: BUILD
+  # ============================================
   build:
     name: Build Docker Image
     needs: test
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image
+      - name: Login to Docker Hub
+        if: secrets.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          load: true
-          tags: drug-app:latest
+          push: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Verify image
-        run: docker images drug-app
+        run: docker images ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
-      - name: Test container
+      - name: Run container test
         run: |
-          docker run -d --name test-app -p 5000:5000 drug-app:latest
-          sleep 5
-          docker ps
+          docker run -d --name test-app -p 5001:5000 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          sleep 10
           docker logs test-app
           docker stop test-app
           docker rm test-app
+
+  # ============================================
+  # STAGE 3: DEPLOY TO KUBERNETES
+  # ============================================
+  deploy:
+    name: Deploy to Kubernetes
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    environment: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.28.0
+
+      - name: Configure kubectl
+        if: secrets.KUBE_CONFIG != ''
+        run: |
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Deploy to Kubernetes
+        if: secrets.KUBE_CONFIG != ''
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl apply -f k8s/hpa.yaml
+
+      - name: Wait for deployment
+        if: secrets.KUBE_CONFIG != ''
+        run: |
+          kubectl rollout status deployment/drug-recommendation-app -n drug-recommendation --timeout=300s
+
+      - name: Verify deployment
+        if: secrets.KUBE_CONFIG != ''
+        run: |
+          kubectl get all -n drug-recommendation
+          kubectl get hpa -n drug-recommendation
+
+      - name: Show application info
+        if: secrets.KUBE_CONFIG != ''
+        run: |
+          kubectl describe pod -n drug-recommendation | grep -A 5 "Conditions:"
+          kubectl get svc -n drug-recommendation -o wide

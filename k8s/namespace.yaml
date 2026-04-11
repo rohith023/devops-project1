@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: drug-recommendation
+  labels:
+    name: drug-recommendation
+    environment: production
