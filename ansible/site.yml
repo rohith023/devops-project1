@@ -1,0 +1,120 @@
+---
+- name: Complete Infrastructure Setup
+  hosts: all
+  become: yes
+
+  vars:
+    docker_image: "drug-app:latest"
+    app_port: 5000
+
+  tasks:
+    - name: Update system
+      apt:
+        update_cache: yes
+        upgrade: dist
+        autoremove: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install common utilities
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+          - vim
+          - htop
+        state: present
+
+- name: Deploy Application with Docker
+  hosts: app
+  become: yes
+
+  vars:
+    docker_image: "drug-app:latest"
+    app_port: 5000
+
+  tasks:
+    - name: Create app directory
+      file:
+        path: /opt/drug-app
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Build Docker image
+      community.docker.docker_image:
+        name: drug-app
+        tag: latest
+        build:
+          path: /opt/drug-app
+        source: build
+        state: present
+
+    - name: Run container
+      community.docker.docker_container:
+        name: drug-app
+        image: "{{ docker_image }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "{{ app_port }}:5000"
+        env:
+          FLASK_ENV: production
+
+    - name: Wait for app to start
+      wait_for:
+        port: "{{ app_port }}"
+        delay: 5
+        timeout: 60
+
+- name: Setup Kubernetes Cluster
+  hosts: k8s
+  become: yes
+
+  tasks:
+    - name: Initialize Kubernetes master
+      command: kubeadm init --pod-network-cidr=10.244.0.0/16
+      when: "'k8s-master' in inventory_hostname"
+      register: kubeadm_init
+
+    - name: Setup kubeconfig for ubuntu user
+      command: "{{ item }}"
+      with_items:
+        - mkdir -p /home/ubuntu/.kube
+        - cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+        - chown ubuntu:ubuntu /home/ubuntu/.kube/config
+      when: "'k8s-master' in inventory_hostname"
+
+    - name: Install Calico network plugin
+      command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+      when: "'k8s-master' in inventory_hostname"
+
+    - name: Get join command
+      command: kubeadm token create --print-join-command
+      when: "'k8s-master' in inventory_hostname"
+      register: join_command
+
+    - name: Join worker nodes
+      command: "{{ hostvars[groups['k8s-master'][0]].join_command.stdout }}"
+      when: "'k8s-node' in inventory_hostname"
+
+- name: Deploy to Kubernetes
+  hosts: k8s-master
+  become: yes
+
+  vars:
+    namespace: drug-recommendation
+
+  tasks:
+    - name: Create namespace
+      kubernetes.core.k8s:
+        name: "{{ namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Apply Kubernetes manifests
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('file', '../k8s/deployment.yaml') | from_yaml_all }}"
+        namespace: "{{ namespace }}"
